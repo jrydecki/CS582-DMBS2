@@ -54,6 +54,7 @@ def create_stock_db_table(stock_name):
               ")"
             )
     cursor.execute(query)
+    conn.commit()
 
 
 def initialize_tables(filename):
@@ -63,8 +64,16 @@ def initialize_tables(filename):
             create_stock_db_table(stock.strip())
             stocks.append(stock.strip())
 
+def get_last_20_points(stock):
+    query = f"SELECT MAX(rowid) FROM `{stock}`"
+    max_id = cursor.execute(query).fetchall()[0][0]
+    if max_id is None:
+        return []
     
-
+    query = f"SELECT * FROM `{stock}` WHERE rowid > ? AND rowid <= ?"
+    rows = cursor.execute(query, (max_id-20, max_id)).fetchall()
+    
+    return rows
 
 def main():
     parser = argparse.ArgumentParser()
@@ -74,9 +83,9 @@ def main():
                          action=argparse.BooleanOptionalAction, 
                          help="Dictates if the database needs to be populated -- if the CSV needs to be 'inserted'."
                         )
-    args = parser.parse_args()
+    cmd_args = parser.parse_args()
 
-    if args.insert:
+    if cmd_args.insert:
         insert_csv("data/Sample1MinuteData.csv")
 
     seen_stocks = set()
@@ -84,9 +93,39 @@ def main():
     time = 400
     while time <= 1959:
         query = "SELECT * FROM stock_data WHERE Time == ?"
-        rows = cursor.execute(query, (time,))
-        for row in rows:
-            pass
+        rows = cursor.execute(query, (time,)).fetchall()
+        for cur_row in rows:
+            
+            stock = cur_row[0]
+            if not stock in seen_stocks:
+                create_stock_db_table(stock)
+                seen_stocks.add(stock)
+
+            last_20 = get_last_20_points(stock)
+            
+            # Calculate SMA
+            if len(last_20) >= 20:
+                sum = 0
+                for point in last_20:
+                    sum += point[5]
+
+                sum += cur_row[5]
+                sma = sum / 21
+
+            else:
+                sma = 0
+
+            # Calculate RangeRatio
+
+            query = f"INSERT INTO `{stock}` VALUES (?,?,?,?,?,?,?,?)"  
+            args = (*(cur_row[:-1]), sma, 0)      
+            cursor.execute(query, args)
+            conn.commit()
+
+            break
+            
+        break
+            
 
 
         time += 1
