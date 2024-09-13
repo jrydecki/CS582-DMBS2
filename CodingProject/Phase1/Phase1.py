@@ -5,7 +5,8 @@
 # 
 import sqlite3
 import argparse
-from db_phase1 import conn, cursor
+import datetime
+from db_phase1 import conn, cursor, today_str
 
 
 def create_stock_data_table():
@@ -37,7 +38,6 @@ def insert_csv(filename):
                      f"{fields[6]}"   # Volume
                      ")"
                     )
-            print(query)
             cursor.execute(query)
         conn.commit()
 
@@ -64,16 +64,17 @@ def initialize_tables(filename):
             create_stock_db_table(stock.strip())
             stocks.append(stock.strip())
 
-def get_last_20_points(stock):
+def get_last_points(stock, num):
     query = f"SELECT MAX(rowid) FROM `{stock}`"
     max_id = cursor.execute(query).fetchall()[0][0]
     if max_id is None:
         return []
     
     query = f"SELECT * FROM `{stock}` WHERE rowid > ? AND rowid <= ?"
-    rows = cursor.execute(query, (max_id-20, max_id)).fetchall()
+    rows = cursor.execute(query, (max_id-num, max_id)).fetchall()
     
     return rows
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -86,12 +87,20 @@ def main():
     cmd_args = parser.parse_args()
 
     if cmd_args.insert:
+        print("Creating database from CSV file...")
         insert_csv("data/Sample1MinuteData.csv")
+        print("Done!")
 
     seen_stocks = set()
 
+    print("Starting Processing")
+
     time = 400
     while time <= 1959:
+        print(f"{datetime.datetime.now().time()} Proccessing for Time: {time}...")
+        sma_file = f"SMA/{today_str}-{time}-SMA.txt"
+        rr_file = f"RR/{today_str}-{time}-RangeRatio.txt"
+
         query = "SELECT * FROM stock_data WHERE Time == ?"
         rows = cursor.execute(query, (time,)).fetchall()
         for cur_row in rows:
@@ -101,7 +110,7 @@ def main():
                 create_stock_db_table(stock)
                 seen_stocks.add(stock)
 
-            last_20 = get_last_20_points(stock)
+            last_20 = get_last_points(stock, 20)
             
             # Calculate SMA
             if len(last_20) >= 20:
@@ -111,23 +120,52 @@ def main():
 
                 sum += cur_row[5] # Add current stock value
                 sma = sum / 21
+                if sma >= 1:
+                    sma = round(sma, 2)
+                else:
+                    sma = round(sma, 3)
 
             else:
                 sma = 0
 
             # Calculate RangeRatio
+            last_21 = get_last_points(stock, 21)
+            if len(last_21) >= 21:
+                cur_high = cur_row[3]
+                cur_low = cur_row[4]
+                max_high = max([row[3] for row in last_21])
+                min_low = min([row[4] for row in last_21])
 
+                if (max_high == min_low):
+                    rr = 1 # Unsure if this is the correct value
+
+                else:
+                    rr = ( cur_high - cur_low ) / ( max_high - min_low )
+
+                    if rr >= 1:
+                        rr = round(rr, 2)
+                    else:
+                        rr = round(rr, 3)
+
+            else:
+                rr = 0
+
+
+             # Write Required Output
+            with open(sma_file, "a") as f:
+                f.write(f"{time} {stock} 21 SMA: {sma}\n")
+
+            with open(rr_file, "a") as f:
+                f.write(f"{time} {stock} 21 Range Ratio: {rr}\n")
+
+            
+
+            # Add changes to DB
             query = f"INSERT INTO `{stock}` VALUES (?,?,?,?,?,?,?,?)"  
-            args = (*(cur_row[:-1]), sma, 0)      
+            args = (*(cur_row[:-1]), sma, rr)      
             cursor.execute(query, args)
             conn.commit()
-
-            break
             
-        break
-            
-
-
         time += 1
 
 
