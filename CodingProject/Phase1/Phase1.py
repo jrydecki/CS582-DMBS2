@@ -6,6 +6,8 @@
 import sqlite3
 import argparse
 import datetime
+import json
+from time import perf_counter_ns
 from db_phase1 import conn, cursor, today_str
 
 
@@ -95,81 +97,106 @@ def main():
 
     print("Starting Processing")
 
+    
+    THING = {}
     time = 400
-    while time <= 1959:
-        print(f"{datetime.datetime.now().time()} Proccessing for Time: {time}...")
+    while time <= 950: # 1959
+        THING[time] = {
+            "last_21": [],
+            "sma": [],
+            "rr": [],
+            "insert": [],
+        }
+        print(f"[{datetime.datetime.now().time()}] Proccessing for Time: {time}...")
         sma_file = f"SMA/{today_str}-{time}-SMA.txt"
         rr_file = f"RR/{today_str}-{time}-RangeRatio.txt"
 
         query = "SELECT * FROM stock_data WHERE Time == ?"
         rows = cursor.execute(query, (time,)).fetchall()
-        for cur_row in rows:
-            
-            stock = cur_row[0]
-            if not stock in seen_stocks:
-                create_stock_db_table(stock)
-                seen_stocks.add(stock)
+        with open(sma_file, "a") as sma_f, open(rr_file, "a") as rr_f:
+            for cur_row in rows:
+                
+                stock = cur_row[0]
+                if not stock in seen_stocks:
+                    create_stock_db_table(stock)
+                    seen_stocks.add(stock)
 
-            last_20 = get_last_points(stock, 20)
-            
-            # Calculate SMA
-            if len(last_20) >= 20:
-                sum = 0
-                for point in last_20:
-                    sum += point[5]
+                t1 = perf_counter_ns()
+                last_21 = get_last_points(stock, 21)
+                last_20 = last_21[:-1]
+                t2 = perf_counter_ns()
+                THING[time]["last_21"].append(t2-t1)
+                
+                #print(f"Last 21 Points Time: {t2-t1} ns")
+                
+                # Calculate SMA
+                t1 = perf_counter_ns()
+                if len(last_20) >= 20:
+                    sum = 0
+                    for point in last_20:
+                        sum += point[5]
 
-                sum += cur_row[5] # Add current stock value
-                sma = sum / 21
-                if sma >= 1:
-                    sma = round(sma, 2)
-                else:
-                    sma = round(sma, 3)
-
-            else:
-                sma = 0
-
-            # Calculate RangeRatio
-            last_21 = get_last_points(stock, 21)
-            if len(last_21) >= 21:
-                cur_high = cur_row[3]
-                cur_low = cur_row[4]
-                max_high = max([row[3] for row in last_21])
-                min_low = min([row[4] for row in last_21])
-
-                if (max_high == min_low):
-                    rr = 1 # Unsure if this is the correct value
-
-                else:
-                    rr = ( cur_high - cur_low ) / ( max_high - min_low )
-
-                    if rr >= 1:
-                        rr = round(rr, 2)
+                    sum += cur_row[5] # Add current stock value
+                    sma = sum / 21
+                    if sma >= 1:
+                        sma = round(sma, 2)
                     else:
-                        rr = round(rr, 3)
+                        sma = round(sma, 3)
 
-            else:
-                rr = 0
+                else:
+                    sma = 0
+                t2 = perf_counter_ns()
+                THING[time]["sma"].append(t2-t1)
 
+                # Calculate RangeRatio
+                t1 = perf_counter_ns()
+                if len(last_21) >= 21:
+                    cur_high = cur_row[3]
+                    cur_low = cur_row[4]
+                    max_high = max([row[3] for row in last_21])
+                    min_low = min([row[4] for row in last_21])
 
-             # Write Required Output
-            with open(sma_file, "a") as f:
-                f.write(f"{time} {stock} 21 SMA: {sma}\n")
+                    if (max_high == min_low):
+                        rr = 1 # Unsure if this is the correct value
 
-            with open(rr_file, "a") as f:
-                f.write(f"{time} {stock} 21 Range Ratio: {rr}\n")
+                    else:
+                        rr = ( cur_high - cur_low ) / ( max_high - min_low )
 
-            
+                        if rr >= 1:
+                            rr = round(rr, 2)
+                        else:
+                            rr = round(rr, 3)
 
-            # Add changes to DB
-            query = f"INSERT INTO `{stock}` VALUES (?,?,?,?,?,?,?,?)"  
-            args = (*(cur_row[:-1]), sma, rr)      
-            cursor.execute(query, args)
-            conn.commit()
+                else:
+                    rr = 0
+                t2 = perf_counter_ns()
+                THING[time]["rr"].append(t2-t1)
+
+                # Write Required Output
+                sma_f.write(f"{time} {stock} 21 SMA: {sma}\n")
+                rr_f.write(f"{time} {stock} 21 Range Ratio: {rr}\n")
+
+                
+
+                # Add changes to DB
+                t1 = perf_counter_ns()
+                query = f"INSERT INTO `{stock}` VALUES (?,?,?,?,?,?,?,?)"  
+                args = (*(cur_row[:-1]), sma, rr)      
+                cursor.execute(query, args)
+                conn.commit()
+                t2 = perf_counter_ns()
+                THING[time]["insert"].append(t2-t1)
             
         time += 1
 
 
+    json_string = json.dumps(THING, indent=4)
+    with open("out.json", "w") as f:
+        f.write(json_string)
+    
+    
 
+    
 
 
 if __name__ == "__main__":
