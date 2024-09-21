@@ -93,7 +93,7 @@ def main():
     rr_file = f"RR/{today_str}-RangeRatio.txt"
     
     time = 400
-    while time <= 950: #1959
+    while time <= 1959:
         with open(sma_file, "a") as sma_f, open(rr_file, "a") as rr_f:
             print(f"[{datetime.datetime.now().time()}] Proccessing for Time: {time}...")
             insert_queries = []
