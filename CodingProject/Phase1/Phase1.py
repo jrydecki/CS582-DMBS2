@@ -8,7 +8,7 @@ import argparse
 import datetime
 import json
 from time import perf_counter_ns
-from db_phase1 import conn, cursor, today_str
+from db_phase1 import conn, cursor, today_str, db_name
 
 
 def create_stock_data_table():
@@ -79,41 +79,28 @@ def get_last_points(stock, num):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", 
-                         "--insert", 
-                         default=False, 
-                         action=argparse.BooleanOptionalAction, 
-                         help="Dictates if the database needs to be populated -- if the CSV needs to be 'inserted'."
-                        )
-    cmd_args = parser.parse_args()
 
-    if cmd_args.insert:
-        print("Creating database from CSV file...")
-        insert_csv("data/Sample1MinuteData.csv")
-        print("Done!")
+    print("Creating database from CSV file...")
+    insert_csv("data/Sample1MinuteData.csv")
+    print("Done!")
 
-    seen_stocks = set()
+    
 
     print("Starting Processing")
 
+    seen_stocks = set()
+    sma_file = f"SMA/{today_str}-SMA.txt"
+    rr_file = f"RR/{today_str}-RangeRatio.txt"
     
-    THING = {}
     time = 400
-    while time <= 950: # 1959
-        THING[time] = {
-            "last_21": [],
-            "sma": [],
-            "rr": [],
-            "insert": [],
-        }
-        print(f"[{datetime.datetime.now().time()}] Proccessing for Time: {time}...")
-        sma_file = f"SMA/{today_str}-{time}-SMA.txt"
-        rr_file = f"RR/{today_str}-{time}-RangeRatio.txt"
-
-        query = "SELECT * FROM stock_data WHERE Time == ?"
-        rows = cursor.execute(query, (time,)).fetchall()
+    while time <= 950: #1959
         with open(sma_file, "a") as sma_f, open(rr_file, "a") as rr_f:
+            print(f"[{datetime.datetime.now().time()}] Proccessing for Time: {time}...")
+            insert_queries = []
+
+            query = "SELECT * FROM stock_data WHERE Time == ?"
+            rows = cursor.execute(query, (time,)).fetchall()
+
             for cur_row in rows:
                 
                 stock = cur_row[0]
@@ -121,16 +108,11 @@ def main():
                     create_stock_db_table(stock)
                     seen_stocks.add(stock)
 
-                t1 = perf_counter_ns()
                 last_21 = get_last_points(stock, 21)
                 last_20 = last_21[:-1]
-                t2 = perf_counter_ns()
-                THING[time]["last_21"].append(t2-t1)
-                
-                #print(f"Last 21 Points Time: {t2-t1} ns")
+
                 
                 # Calculate SMA
-                t1 = perf_counter_ns()
                 if len(last_20) >= 20:
                     sum = 0
                     for point in last_20:
@@ -145,11 +127,8 @@ def main():
 
                 else:
                     sma = 0
-                t2 = perf_counter_ns()
-                THING[time]["sma"].append(t2-t1)
 
                 # Calculate RangeRatio
-                t1 = perf_counter_ns()
                 if len(last_21) >= 21:
                     cur_high = cur_row[3]
                     cur_low = cur_row[4]
@@ -169,8 +148,6 @@ def main():
 
                 else:
                     rr = 0
-                t2 = perf_counter_ns()
-                THING[time]["rr"].append(t2-t1)
 
                 # Write Required Output
                 sma_f.write(f"{time} {stock} 21 SMA: {sma}\n")
@@ -179,25 +156,24 @@ def main():
                 
 
                 # Add changes to DB
-                t1 = perf_counter_ns()
                 query = f"INSERT INTO `{stock}` VALUES (?,?,?,?,?,?,?,?)"  
                 args = (*(cur_row[:-1]), sma, rr)      
                 cursor.execute(query, args)
                 conn.commit()
-                t2 = perf_counter_ns()
-                THING[time]["insert"].append(t2-t1)
             
         time += 1
 
+    # Writing In-Memory to a File: https://stackoverflow.com/a/59274634
+    db_file = sqlite3.connect(db_name) 
+    conn.backup(db_file)
+    db_file.close()
 
-    json_string = json.dumps(THING, indent=4)
-    with open("out.json", "w") as f:
-        f.write(json_string)
-    
-    
+    conn.close()
 
-    
+
+
 
 
 if __name__ == "__main__":
     main()
+    
