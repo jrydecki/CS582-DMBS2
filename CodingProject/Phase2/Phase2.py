@@ -3,12 +3,18 @@ from keys import API_KEY
 
 import sqlite3
 import threading
+import schedule 
 from polygon import RESTClient
 from polygon.rest import models
 from datetime import datetime
+from functools import partial
 
 db_lock = threading.Lock()
-
+sma_lock = threading.Lock()
+rr_lock = threading.Lock()
+sma_filename = ""
+rr_filename = ""
+DURATION = 15 * 60 # In seconds
 
 def get_last21(stock, cursor):
     query = f"SELECT MAX(rowid) FROM `{stock}`"
@@ -61,34 +67,64 @@ def process_stocks(stock_list):
     client = RESTClient(api_key=API_KEY)
     resp = client.get_snapshot_all("stocks", stock_list)
     for snap in resp:
-        last_21 = get_last21(snap.ticker, cursor)
+        time_str = datetime.utcfromtimestamp(snap.min.timestamp / 1000).strftime('%H:%M:%S')
+
+        # Get Database Rows
+        with db_lock:
+            last_21 = get_last21(snap.ticker, cursor)
         last_20 = last_21[:-1]
 
         sma = calc_sma(last_20, snap.min.close)
         rr = calc_rr(last_21, snap.min.high, snap.min.low)
 
-        # Write to File
+        # Write to Files
+        with sma_lock:
+            with open(rr_filename, "a") as f:
+                f.write(f"{time_str} {snap.ticker} 21 SMA: {sma}\n")
+        with rr_lock:
+            with open(sma_filename, "a") as f:
+                f.write(f"{time_str} {snap.ticker} 21 Range Ratio: {rr}\n")
 
         # Write Changes to DB
         with db_lock:
             query = f"INSERT INTO `{snap.ticker}` VALUES (?,?,?,?,?,?,?,?)"
             args = (snap.ticker, 
-                    datetime.utcfromtimestamp(snap.min.timestamp / 1000).strftime('%H:%M:%S'),
+                    time_str,
                     snap.min.open,
                     snap.min.close,
                     snap.min.high,
                     snap.min.low,
                     sma,
                     rr,
-                   )
+                )
             cursor.execute(query, args)
             conn.commit()
 
+
+def create_and_start_threads(stock_list, THREADS, interval):
+    print("Processing...")
+    # Create Threads
+    threads = []
+    for i in range(THREADS):
+        beg = i * interval
+        end = (i + 1) * interval
+        threads.append(threading.Thread(target=process_stocks, args=(stock_list[beg:end],)))
+
+    # Start Threads
+    for thread in threads:
+        thread.start()
+
+    # Join Threads
+    for thread in threads:
+        thread.join()
 
 
 if __name__ == "__main__":
 
     today_str = datetime.today().strftime('%Y-%m-%d')
+
+    sma_filename = f"{today_str}-SMA.txt"
+    rr_filename = f"{today_str}-RangeRatio.txt"
 
     # DB Variables
     global conn
@@ -115,23 +151,20 @@ if __name__ == "__main__":
     
     THREADS = 6
     interval = num_stocks // THREADS
-    threads = []
 
-    # Create Threads
-    print("Creating Threads...")
-    for i in range(THREADS):
-        beg = i * interval
-        end = (i + 1) * interval
-        threads.append(threading.Thread(target=process_stocks, args=(stock_list[beg:end],)))
+    partial_func = partial(create_and_start_threads, stock_list, THREADS, interval)
+    schedule.every(1).minutes.do(partial_func)
+    start_time = time.time()
 
-    # Start Threads
-    print("Running Threads...")
-    for thread in threads:
-        thread.start()
+    # https://www.geeksforgeeks.org/python-script-that-is-executed-every-5-minutes/
+    print("In Processing Loop.")
+    while True:
+        if (time.time() - start_time) > DURATION:
+            break
 
-    # Join Threads
-    for thread in threads:
-        thread.join()
+        schedule.run_pending()
+        time.sleep(1)
+
 
     # Writing In-Memory to a File: https://stackoverflow.com/a/59274634
     print("Done. Writing Database File")
@@ -139,7 +172,3 @@ if __name__ == "__main__":
     conn.backup(db_file)
     db_file.close()
     conn.close()
-
-    # client = RESTClient(api_key=API_KEY)
-    # resp = client.get_snapshot_all("stocks", ["NVDA",])
-    # print(resp[0].min.timestamp)
