@@ -1,7 +1,9 @@
 venv
-*/__pycache__
+__pycache__/
 *.db
 *.db-journal
+*.pyc
 *RangeRatio.txt
 *SMA.txt
 *.json
+keys.py
