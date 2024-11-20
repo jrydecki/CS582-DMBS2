@@ -14,6 +14,7 @@ sma_lock = threading.Lock()
 rr_lock = threading.Lock()
 sma_filename = ""
 rr_filename = ""
+last_time = {} # Dict to track last seen timestamp for each stock 
 DURATION = 30 # Minutes
 
 def get_last21(stock, cursor):
@@ -67,13 +68,20 @@ def process_stocks(stock_list):
     client = RESTClient(api_key=API_KEY)
     resp = client.get_snapshot_all("stocks", stock_list)
     for snap in resp:
-        time_str = datetime.utcfromtimestamp(snap.min.timestamp / 1000).strftime('%H:%M:%S')
+        time_str = datetime.fromtimestamp(snap.min.timestamp / 1000).strftime('%H:%M:%S')
+
+        # Ignore any older datapoints
+        if last_time[snap.ticker] == time_str:
+            continue
+        else:
+            last_time[snap.ticker] = time_str
 
         # Get Database Rows
         with db_lock:
             last_21 = get_last21(snap.ticker, cursor)
         last_20 = last_21[:-1]
 
+        # Calculations
         sma = calc_sma(last_20, snap.min.close)
         rr = calc_rr(last_21, snap.min.high, snap.min.low)
 
@@ -107,7 +115,10 @@ def create_and_start_threads(stock_list, THREADS, interval):
     for i in range(THREADS):
         beg = i * interval
         end = (i + 1) * interval
-        threads.append(threading.Thread(target=process_stocks, args=(stock_list[beg:end],)))
+        if i == (THREADS - 1): # If last interval, pass whatever is left
+            threads.append(threading.Thread(target=process_stocks, args=(stock_list[beg:],)))
+        else:
+            threads.append(threading.Thread(target=process_stocks, args=(stock_list[beg:end],)))
 
     # Start Threads
     for thread in threads:
@@ -120,8 +131,8 @@ def create_and_start_threads(stock_list, THREADS, interval):
 
 if __name__ == "__main__":
 
+    # File Variables
     today_str = datetime.today().strftime('%Y-%m-%d')
-
     sma_filename = f"{today_str}-SMA.txt"
     rr_filename = f"{today_str}-RangeRatio.txt"
 
@@ -132,10 +143,11 @@ if __name__ == "__main__":
 
     # Get Tickers from StockList File
     stock_file = "./StockList.txt" 
-    stock_list = [] # 6037
+    stock_list = []
     with open(stock_file, "r") as f:
         for line in f.readlines():
             stock_list.append(line.strip())
+            last_time[line.strip()] = None
     num_stocks = len(stock_list)
         
 
@@ -148,16 +160,17 @@ if __name__ == "__main__":
     import time
     time.sleep(1)
     
+    # Run Threads
     THREADS = 6
     interval = num_stocks // THREADS
-
     print("Entering Processing Loop...")
     for i in range(DURATION):
         start_time = time.time()
         create_and_start_threads(stock_list, THREADS, interval)
         run_time = time.time() - start_time
         print(f"Current Minute Runtime: {run_time:.3f} seconds")
-        time.sleep(60 - run_time)
+        if i != (DURATION - 1):
+            time.sleep(60 - run_time)
 
 
     # Writing In-Memory to a File: https://stackoverflow.com/a/59274634
