@@ -14,7 +14,7 @@ sma_lock = threading.Lock()
 rr_lock = threading.Lock()
 sma_filename = ""
 rr_filename = ""
-DURATION = 15 * 60 # In seconds
+DURATION = 30 # Minutes
 
 def get_last21(stock, cursor):
     query = f"SELECT MAX(rowid) FROM `{stock}`"
@@ -79,10 +79,10 @@ def process_stocks(stock_list):
 
         # Write to Files
         with sma_lock:
-            with open(rr_filename, "a") as f:
+            with open(sma_filename, "a") as f:
                 f.write(f"{time_str} {snap.ticker} 21 SMA: {sma}\n")
         with rr_lock:
-            with open(sma_filename, "a") as f:
+            with open(rr_filename, "a") as f:
                 f.write(f"{time_str} {snap.ticker} 21 Range Ratio: {rr}\n")
 
         # Write Changes to DB
@@ -102,7 +102,6 @@ def process_stocks(stock_list):
 
 
 def create_and_start_threads(stock_list, THREADS, interval):
-    print("Processing...")
     # Create Threads
     threads = []
     for i in range(THREADS):
@@ -152,18 +151,13 @@ if __name__ == "__main__":
     THREADS = 6
     interval = num_stocks // THREADS
 
-    partial_func = partial(create_and_start_threads, stock_list, THREADS, interval)
-    schedule.every(1).minutes.do(partial_func)
-    start_time = time.time()
-
-    # https://www.geeksforgeeks.org/python-script-that-is-executed-every-5-minutes/
-    print("In Processing Loop.")
-    while True:
-        if (time.time() - start_time) > DURATION:
-            break
-
-        schedule.run_pending()
-        time.sleep(1)
+    print("Entering Processing Loop...")
+    for i in range(DURATION):
+        start_time = time.time()
+        create_and_start_threads(stock_list, THREADS, interval)
+        run_time = time.time() - start_time
+        print(f"Current Minute Runtime: {run_time:.3f} seconds")
+        time.sleep(60 - run_time)
 
 
     # Writing In-Memory to a File: https://stackoverflow.com/a/59274634
