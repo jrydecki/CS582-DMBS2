@@ -3,11 +3,9 @@ from keys import API_KEY
 
 import sqlite3
 import threading
-import schedule 
 from polygon import RESTClient
 from polygon.rest import models
 from datetime import datetime
-from functools import partial
 
 db_lock = threading.Lock()
 sma_lock = threading.Lock()
